@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <title>Senac Game</title>
+    <style>
+        :root {
+            --bg: #0f172a;
+            --panel: #111827cc;
+            --text: #e5e7eb;
+            --accent: #22c55e;
+            --wall: #2563eb;
+            --good-note: #22c55e;    /* Nota A (boa) */
+            --bad-note1: #ef4444;    /* Nota PA (ruim) */
+            --bad-note2: #f59e0b;    /* Nota NA (ruim) */
+            --player: #22c55e;
+            --player-head: #10b981;
+        }
+        
+        html, body {
+            margin: 0;
+            height: 100%;
+            background: radial-gradient(1000px 600px at 50% 0%, #111827, var(--bg));
+            color: var(--text);
+            font-family: system-ui, sans-serif;
+            overscroll-behavior: none;
+        }
+        
+        .hud {
+            position: fixed;
+            left: 50%;
+            transform: translateX(-50%);
+            top: 10px;
+            display: flex;
+            gap: 14px;
+            align-items: center;
+            padding: 10px 14px;
+            background: var(--panel);
+            border-radius: 14px;
+            backdrop-filter: blur(6px);
+            user-select: none;
+        }
+        
+        .hud .pill {
+            background: #1f2937;
+            padding: 6px 10px;
+            border-radius: 999px;
+            font-weight: 600;
+        }
+        
+        #wrap {
+            position: fixed;
+            inset: 0;
+            display: grid;
+            place-items: center;
+        }
+        
+        canvas {
+            background: #020617;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px #000a;
+            touch-action: none;
+        }
+        
+        .controls {
+            position: fixed;
+            bottom: 16px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: grid;
+            grid-template-columns: 64px 64px 64px;
+            grid-template-rows: 64px 64px 64px;
+            gap: 10px;
+        }
+        
+        .btn {
+            width: 64px;
+            height: 64px;
+            background: #111827cc;
+            border: 1px solid #334155;
+            border-radius: 16px;
+            display: grid;
+            place-items: center;
+            color: var(--text);
+            font-weight: 900;
+            font-size: 20px;
+        }
+        
+        .game-over {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.8);
+            display: none;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 10;
+        }
+        
+        .game-over h2 {
+            font-size: 3rem;
+            margin-bottom: 2rem;
+        }
+        
+        .game-over button {
+            background: var(--accent);
+            border: none;
+            padding: 12px 24px;
+            border-radius: 12px;
+            font-size: 1.2rem;
+            font-weight: bold;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <div class="hud">
+        <div class="pill">Senac Game</div>
+        <div class="pill">Pontos: <span id="score">0</span></div>
+        <div class="pill">Comprimento: <span id="length">1</span></div>
+        <div class="pill">Fase: <span id="level">1</span></div>
+    </div>
+    
+    <div id="wrap">
+        <canvas id="game" width="800" height="800"></canvas>
+    </div>
+    
+    <div class="game-over" id="gameOver">
+        <h2>Reprovado!</h2>
+        <p>Sua pontuação: <span id="finalScore">0</span></p>
+        <button id="restart">Jogar Novamente</button>
+    </div>
+    
+    <!-- D-Pad -->
+    <div class="controls" id="controls">
+        <div></div>
+        <button class="btn" data-dir="up">⬆️</button>
+        <div></div>
+        <button class="btn" data-dir="left">⬅️</button>
+        <button class="btn" data-dir="down">⬇️</button>
+        <button class="btn" data-dir="right">➡️</button>
+        <div></div><div></div><div></div>
+    </div>
+    
+    <script>
+        (() => {
+            const canvas = document.getElementById('game');
+            const ctx = canvas.getContext('2d');
+            const hud = {
+                score: document.getElementById('score'),
+                length: document.getElementById('length'),
+                level: document.getElementById('level')
+            };
+            const gameOverScreen = document.getElementById('gameOver');
+            const finalScore = document.getElementById('finalScore');
+            const restartButton = document.getElementById('restart');
+            
+            // Configuração do mundo do jogo
+            const GRID_SIZE = 21;
+            const TILE = {
+                size: 28
+            };
+            
+            function fitCanvas() {
+                const maxW = Math.min(window.innerWidth - 20, 900);
+                const maxH = Math.min(window.innerHeight - 140, 900);
+                const tile = Math.floor(Math.min(maxW / GRID_SIZE, maxH / GRID_SIZE));
+                const w = tile * GRID_SIZE, h = tile * GRID_SIZE;
+                canvas.style.width = w + 'px';
+                canvas.style.height = h + 'px';
+                canvas.width = w;
+                canvas.height = h;
+                TILE.size = tile;
+            }
+            
+            window.addEventListener('resize', fitCanvas);
+            fitCanvas();
+            
+            // Estados do jogo
+            const GAME_STATES = {
+                PLAYING: 'playing',
+                GAME_OVER: 'game_over'
+            };
+            
+            let gameState = GAME_STATES.PLAYING;
+            
+            // Direções
+            const DIRS = {
+                left: { x: -1, y: 0 },
+                right: { x: 1, y: 0 },
+                up: { x: 0, y: -1 },
+                down: { x: 0, y: 1 }
+            };
+            
+            // Jogador (cobrinha)
+            const snake = {
+                body: [{ x: 10, y: 10 }], // Começa com apenas a cabeça
+                direction: 'right',
+                nextDirection: 'right',
+                color: getComputedStyle(document.documentElement).getPropertyValue('--player').trim(),
+                headColor: getComputedStyle(document.documentElement).getPropertyValue('--player-head').trim()
+            };
+            
+            // Notas
+            const notes = {
+                good: { type: 'A', color: getComputedStyle(document.documentElement).getPropertyValue('--good-note').trim() },
+                bad: [
+                    { type: 'PA', color: getComputedStyle(document.documentElement).getPropertyValue('--bad-note1').trim() },
+                    { type: 'NA', color: getComputedStyle(document.documentElement).getPropertyValue('--bad-note2').trim() }
+                ]
+            };
+            
+            let activeNotes = []; // Array para armazenar múltiplas notas ativas
+            let score = 0;
+            let gameSpeed = 150; // ms por movimento
+            let noteSpawnTimer = 0;
+            const NOTE_SPAWN_INTERVAL = 1000; // Nova nota a cada 1 segundo
+            const NOTE_LIFETIME = 5000; // Notas desaparecem após 5 segundos
+            const MAX_NOTES = 8; // Número máximo de notas na tela
+            
+            // Gerar uma nova nota em posição aleatória
+            function generateNote() {
+                // 70% de chance de ser uma nota boa, 30% de ser ruim
+                const isGoodNote = Math.random() < 0.7;
+                let noteType, noteColor;
+                
+                if (isGoodNote) {
+                    noteType = notes.good.type;
+                    noteColor = notes.good.color;
+                } else {
+                    const badNoteIndex = Math.floor(Math.random() * notes.bad.length);
+                    noteType = notes.bad[badNoteIndex].type;
+                    noteColor = notes.bad[badNoteIndex].color;
+                }
+                
+                // Encontrar uma posição vazia
+                let x, y;
+                let positionValid = false;
+                let attempts = 0;
+                
+                while (!positionValid && attempts < 50) {
+                    x = Math.floor(Math.random() * GRID_SIZE);
+                    y = Math.floor(Math.random() * GRID_SIZE);
+                    positionValid = true;
+                    
+                    // Verificar se não está em cima da cobra
+                    for (const segment of snake.body) {
+                        if (segment.x === x && segment.y === y) {
+                            positionValid = false;
+                            break;
+                        }
+                    }
+                    
+                    // Verificar se não está em cima de outra nota
+                    if (positionValid) {
+                        for (const note of activeNotes) {
+                            if (note.x === x && note.y === y) {
+                                positionValid = false;
+                                break;
+                            }
+                        }
+                    }
+                    
+                    attempts++;
+                }
+                
+                if (positionValid) {
+                    activeNotes.push({
+                        x: x,
+                        y: y,
+                        type: noteType,
+                        color: noteColor,
+                        spawnTime: Date.now()
+                    });
+                }
+            }
+            
+            // Remover notas antigas
+            function cleanupNotes() {
+                const now = Date.now();
+                activeNotes = activeNotes.filter(note => now - note.spawnTime < NOTE_LIFETIME);
+            }
+            
+            // Inicializar o jogo
+            function initGame() {
+                snake.body = [{ x: 10, y: 10 }];
+                snake.direction = 'right';
+                snake.nextDirection = 'right';
+                activeNotes = [];
+                score = 0;
+                gameState = GAME_STATES.PLAYING;
+                gameOverScreen.style.display = 'none';
+                hud.score.textContent = score;
+                hud.length.textContent = snake.body.length;
+                
+                // Gerar algumas notas iniciais
+                for (let i = 0; i < 5; i++) {
+                    generateNote();
+                }
+            }
+            
+            // Atualizar a cobrinha
+            function updateSnake() {
+                // Atualizar a direção
+                snake.direction = snake.nextDirection;
+                
+                // Calcular nova posição da cabeça
+                const head = { ...snake.body[0] };
+                const direction = DIRS[snake.direction];
+                head.x += direction.x;
+                head.y += direction.y;
+                
+                // Verificar colisões com as paredes
+                if (head.x < 0 || head.x >= GRID_SIZE || head.y < 0 || head.y >= GRID_SIZE) {
+                    gameOver();
+                    return;
+                }
+                
+                // Verificar colisão com o próprio corpo
+                for (let i = 0; i < snake.body.length; i++) {
+                    if (head.x === snake.body[i].x && head.y === snake.body[i].y) {
+                        gameOver();
+                        return;
+                    }
+                }
+                
+                // Adicionar nova cabeça
+                snake.body.unshift(head);
+                
+                // Verificar se pegou alguma nota
+                let noteCollected = false;
+                for (let i = 0; i < activeNotes.length; i++) {
+                    const note = activeNotes[i];
+                    if (head.x === note.x && head.y === note.y) {
+                        if (note.type === 'A') {
+                            // Nota boa - aumentar pontuação e manter o comprimento (já adicionamos a cabeça)
+                            score += 10;
+                            hud.score.textContent = score;
+                            hud.length.textContent = snake.body.length;
+                        } else {
+                            // Nota ruim - game over
+                            gameOver();
+                            return;
+                        }
+                        
+                        // Remover a nota coletada
+                        activeNotes.splice(i, 1);
+                        noteCollected = true;
+                        break;
+                    }
+                }
+                
+                // Se não pegou nota, remover a cauda
+                if (!noteCollected) {
+                    snake.body.pop();
+                }
+            }
+            
+            // Desenhar o jogo
+            function draw() {
+                const size = TILE.size;
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                
+                // Desenhar grade de fundo
+                ctx.strokeStyle = '#1e293b';
+                ctx.lineWidth = 0.5;
+                
+                for (let i = 0; i <= GRID_SIZE; i++) {
+                    // Linhas verticais
+                    ctx.beginPath();
+                    ctx.moveTo(i * size, 0);
+                    ctx.lineTo(i * size, canvas.height);
+                    ctx.stroke();
+                    
+                    // Linhas horizontais
+                    ctx.beginPath();
+                    ctx.moveTo(0, i * size);
+                    ctx.lineTo(canvas.width, i * size);
+                    ctx.stroke();
+                }
+                
+                // Desenhar a cobrinha
+                for (let i = 0; i < snake.body.length; i++) {
+                    const segment = snake.body[i];
+                    
+                    if (i === 0) {
+                        // Cabeça
+                        ctx.fillStyle = snake.headColor;
+                    } else {
+                        // Corpo
+                        ctx.fillStyle = snake.color;
+                    }
+                    
+                    ctx.fillRect(segment.x * size, segment.y * size, size, size);
+                    
+                    // Adicionar um efeito de "escama"
+                    ctx.strokeStyle = '#0f172a';
+                    ctx.lineWidth = 1;
+                    ctx.strokeRect(segment.x * size, segment.y * size, size, size);
+                }
+                
+                // Desenhar as notas ativas
+                for (const note of activeNotes) {
+                    // Calcular transparência baseada no tempo de vida restante
+                    const timeLeft = NOTE_LIFETIME - (Date.now() - note.spawnTime);
+                    const alpha = Math.min(1, timeLeft / 2000); // Fica mais transparente nos últimos 2 segundos
+                    
+                    ctx.fillStyle = note.color;
+                    ctx.globalAlpha = alpha;
+                    ctx.font = `bold ${size * 0.6}px system-ui`;
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(
+                        note.type, 
+                        note.x * size + size / 2, 
+                        note.y * size + size / 2
+                    );
+                    ctx.globalAlpha = 1; // Resetar alpha
+                }
+            }
+            
+            // Game over
+            function gameOver() {
+                gameState = GAME_STATES.GAME_OVER;
+                finalScore.textContent = score;
+                gameOverScreen.style.display = 'flex';
+            }
+            
+            // Loop principal do jogo
+            function gameLoop(timestamp) {
+                if (gameState === GAME_STATES.PLAYING) {
+                    updateSnake();
+                    
+                    // Gerenciar spawn de notas
+                    noteSpawnTimer += gameSpeed;
+                    if (noteSpawnTimer >= NOTE_SPAWN_INTERVAL && activeNotes.length < MAX_NOTES) {
+                        generateNote();
+                        noteSpawnTimer = 0;
+                    }
+                    
+                    // Limpar notas antigas
+                    cleanupNotes();
+                    
+                    draw();
+                }
+                
+                setTimeout(gameLoop, gameSpeed);
+            }
+            
+            // Controles teclado
+            const keyMap = {
+                ArrowLeft: 'left',
+                ArrowRight: 'right',
+                ArrowUp: 'up',
+                ArrowDown: 'down',
+                a: 'left',
+                d: 'right',
+                w: 'up',
+                s: 'down'
+            };
+            
+            window.addEventListener('keydown', e => {
+                if (keyMap[e.key]) {
+                    // Prevenir mudança de direção para o sentido oposto (que causaria colisão consigo mesmo)
+                    const oppositeDirections = {
+                        left: 'right',
+                        right: 'left',
+                        up: 'down',
+                        down: 'up'
+                    };
+                    
+                    if (snake.direction !== oppositeDirections[keyMap[e.key]]) {
+                        snake.nextDirection = keyMap[e.key];
+                    }
+                }
+            });
+            
+            // Controles touch
+            document.getElementById('controls').addEventListener('click', e => {
+                if (e.target.dataset.dir) {
+                    const oppositeDirections = {
+                        left: 'right',
+                        right: 'left',
+                        up: 'down',
+                        down: 'up'
+                    };
+                    
+                    if (snake.direction !== oppositeDirections[e.target.dataset.dir]) {
+                        snake.nextDirection = e.target.dataset.dir;
+                    }
+                }
+            });
+            
+            // Botão de reiniciar
+            restartButton.addEventListener('click', initGame);
+            
+            // Iniciar o jogo
+            initGame();
+            gameLoop();
+        })();
+    </script>
+</body>
+</html>
